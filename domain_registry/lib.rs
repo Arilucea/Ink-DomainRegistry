@@ -7,11 +7,26 @@ mod domain_registry {
     
     use ink::{storage::Mapping};
     use alloc::{string::{String}};
-    use scale::HasCompact;
     use sha3::{Digest};
 
     /// The Domain registry result type.
     pub type Result<T> = core::result::Result<T, Error>;
+
+    // Event emitted when a new domain is registered
+    #[ink(event)]
+    pub struct DomainRegistered {
+        domain: String,
+        owner: AccountId,
+        expiration_data: u64,
+    }
+
+    // Event emitted when a domain is renewed
+    #[ink(event)]
+    pub struct DomainRenewed {
+        domain: String,
+        owner: AccountId,
+        expiration_data: u64,
+    }
 
     /// The Domain registry error types.
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
@@ -130,7 +145,80 @@ mod domain_registry {
             Ok(())
         }
 
-        
+        #[ink(message)]
+        pub fn rent_domain(&mut self, domain: String, salt: Hash, duration: u64, metadata: String) -> Result<()> {
+            let domain_slice: &str = &domain;
+            let secret: &str = &(self.generate_secret(domain_slice.to_string(), salt));
+            
+            let requester: AccountId = self.requested_domain.get(secret).unwrap(); 
+            if requester != self.env().caller() {
+                return Err(Error::NotTheOriginalRequester);
+            }
+            let reserve_time: u64 = self.reserve_time.get(secret).unwrap(); 
+            if reserve_time < self.env().block_timestamp() {
+                return Err(Error::RentCannotBeDoneInSameBlock);
+            } 
+
+            let domain_cost: u128 = self.rent_price(domain_slice.to_string(), duration).unwrap();
+            if self.env().transferred_value() < domain_cost {
+                return Err(Error::SentValueIsNotEnough);
+            }
+
+            let domain_key: &str = &domain;
+
+            if self.domains.get(domain_key) != None {
+                let domain_data: DomainData = self.domains.get(domain_key).unwrap();
+                if domain_data.expiration_date >= self.env().block_timestamp() {
+                    return Err(Error::DomainUnavailable);
+                } 
+            }
+
+            let domain_data: DomainData = DomainData {
+                owner: self.env().caller(),
+                expiration_date: self.env().block_timestamp() + duration,
+                metadata: metadata,
+            };
+
+            self.domains.insert(domain_key, &domain_data);
+
+            // Refunds
+            let refund_key = self.create_key(domain_slice.to_string());
+            let refund_data: RefundData = RefundData { expiration_date: domain_data.expiration_date, paid_price: domain_cost };
+            self.refunds.insert(refund_key, &refund_data);
+
+            let lock_balance: u128 = self.locked_balance.get(requester).unwrap_or_default();
+            self.locked_balance.insert(requester, &(lock_balance+domain_cost));
+
+    
+            // Refund left amount of the message value
+            // msg.value - domainCost
+
+            self.env().emit_event(DomainRegistered {
+                domain: domain_slice.to_string(),
+                owner: self.env().caller(),
+                expiration_data: self.env().block_timestamp() + duration,
+            });
+
+            Ok(())
+        }
+
+        #[ink(message)]
+        pub fn testFunc(&self, domain: String, salt: Hash) -> String {
+            if (self.domains.get(domain) == None) {
+                return ("bbbbbbbbbbbb".to_string());
+            }
+
+            return "aaaaaaaaaa".to_string();
+        }
+
+        fn create_key(&mut self, domain: String) -> String {
+            let mut hasher = sha3::Keccak256::new();
+            hasher.update(domain);
+            hasher.update(self.env().caller());
+            let secret: String = format!("{:X}", hasher.finalize());
+
+            return secret;
+        }
 
         fn domain_length(&mut self, domain: String) -> u128 {
             return domain.len().try_into().unwrap();
