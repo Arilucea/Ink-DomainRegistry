@@ -39,6 +39,9 @@ mod domain_registry {
         RentCannotBeDoneInSameBlock,
         SentValueIsNotEnough,
         DomainUnavailable,
+        DomainExpired,
+        NotDomainOwner,
+        DomainNotExpired,
     }
 
 
@@ -120,6 +123,11 @@ mod domain_registry {
             return secret;
         }
 
+        /**
+         * @dev Return how much cost to rent a specific domain in a period
+         * @param domain desired domain
+         * @param duration how long is the domain rent (in seconds)
+         */
         #[ink(message)]
         pub fn rent_price(&mut self, domain: String, duration: u64) -> Result<u128> {
             let domain_length = self.domain_length(domain);
@@ -133,6 +141,10 @@ mod domain_registry {
             return Ok(domain_length * duration);
         }
 
+        /**
+         * @dev Reserve a domain using the secret generated with the function above
+         * @param secret combination of domain and salt 
+         */
         #[ink(message)]
         pub fn request_domain(&mut self, secret: String) -> Result<()> {
             let secret_slice: &str = &secret;
@@ -145,7 +157,14 @@ mod domain_registry {
             Ok(())
         }
 
-        #[ink(message)]
+        /**
+         * @dev Confirm a domain reserve, transaction must be send with enough ether to pay for the duration of the rent
+         * @param domain desired domain
+         * @param salt random information
+         * @param duration how long is the domain rent (in seconds)
+         * @param metadata other information realted with the domain
+         */
+        #[ink(message, payable)]
         pub fn rent_domain(&mut self, domain: String, salt: Hash, duration: u64, metadata: String) -> Result<()> {
             let domain_slice: &str = &domain;
             let secret: &str = &(self.generate_secret(domain_slice.to_string(), salt));
@@ -189,9 +208,10 @@ mod domain_registry {
             let lock_balance: u128 = self.locked_balance.get(requester).unwrap_or_default();
             self.locked_balance.insert(requester, &(lock_balance+domain_cost));
 
-    
-            // Refund left amount of the message value
-            // msg.value - domainCost
+            let refund_amount: u128 = self.env().transferred_value() - domain_cost;            
+            if self.env().transfer(self.env().caller(), refund_amount).is_err() {
+                panic!("Transfer failed")
+            }
 
             self.env().emit_event(DomainRegistered {
                 domain: domain_slice.to_string(),
@@ -202,15 +222,94 @@ mod domain_registry {
             Ok(())
         }
 
-        #[ink(message)]
-        pub fn testFunc(&self, domain: String, salt: Hash) -> String {
-            if (self.domains.get(domain) == None) {
-                return ("bbbbbbbbbbbb".to_string());
+    
+        /**
+         * @dev Extend the renting period of an owned domain 
+         * @param domain desired domain
+         * @param duration how long is the domain rent (in seconds)
+         */
+        #[ink(message, payable)]
+        pub fn renew_domain(&mut self, domain: String, duration: u64) -> Result<()> {
+            let domain_slice: &str = &domain;
+
+            let domain_cost: u128 = self.rent_price(domain_slice.to_string(), duration).unwrap();
+            if self.env().transferred_value() < domain_cost {
+                return Err(Error::SentValueIsNotEnough);
             }
 
-            return "aaaaaaaaaa".to_string();
+            let domain_key: &str = &domain;
+            let mut domain_data: DomainData = self.domains.get(domain_key).unwrap();
+            if domain_data.expiration_date <= self.env().block_timestamp() {
+                return Err(Error::DomainExpired);
+            }
+            if domain_data.owner != self.env().caller() {
+                return Err(Error::NotDomainOwner);
+            }
+
+            domain_data.expiration_date = self.env().block_timestamp() + duration;
+            self.domains.insert(domain_key, &domain_data);
+
+            // Refunds
+            let refund_key = self.create_key(domain_slice.to_string());
+            let refund_data: RefundData = RefundData { expiration_date: domain_data.expiration_date, paid_price: domain_cost };
+            self.refunds.insert(refund_key, &refund_data);
+
+            let lock_balance: u128 = self.locked_balance.get(self.env().caller()).unwrap_or_default();
+            self.locked_balance.insert(self.env().caller(), &(lock_balance+domain_cost));
+
+            let refund_amount: u128 = self.env().transferred_value() - domain_cost;
+            if self.env().transfer(self.env().caller(), refund_amount).is_err() {
+                panic!("Transfer failed")
+            }
+
+            self.env().emit_event(DomainRenewed {
+                domain: domain_slice.to_string(),
+                owner: self.env().caller(),
+                expiration_data: self.env().block_timestamp() + duration,
+            });
+
+            Ok(())
         }
 
+        /**
+         * @dev Request the refund of a expired domain
+         * @param domain desired domain
+         */
+        #[ink(message, payable)]
+        pub fn refund_domain(&mut self, domain: String) -> Result<()> {
+            let refund_key = self.create_key(domain);
+            let refund_data: RefundData = self.refunds.get(refund_key).unwrap();
+            if refund_data.expiration_date <= self.env().block_timestamp() {
+                return Err(Error::DomainNotExpired);
+            }
+
+            let amount: u128 = refund_data.paid_price; 
+            if amount > 0 {
+                let locke_balance: u128 = self.locked_balance.get(self.env().caller()).unwrap_or_default();
+                self.locked_balance.insert(self.env().caller(), &(locke_balance-amount));
+                if self.env().transfer(self.env().caller(), amount).is_err() {
+                    panic!("Transfer failed")
+                }    
+            }
+
+            Ok(())
+        }
+
+        /**
+         * @dev Returns information related with the domain
+         * @return DomainData 
+         * owner address owner of the domain
+         * expirationDate timeStamp of the renting expiration
+         * metaData other information realted with the domain
+         * availability boolean indication is the domain can be rented
+         */
+        #[ink(message)]
+        pub fn get_domain_data(&self, domain: String) -> DomainData {
+            let domain_data: DomainData = self.domains.get(domain).unwrap();
+            return domain_data;
+        }
+
+        // Internal functions
         fn create_key(&mut self, domain: String) -> String {
             let mut hasher = sha3::Keccak256::new();
             hasher.update(domain);
@@ -252,9 +351,6 @@ mod domain_registry {
             println!("{}", hash);
 
             domain_registry.request_domain("aaaaaaaaaa".to_string());
-
-            let hash = domain_registry.testFunc("aaaaaaaaaa".to_string(), salt);
-            println!("{:?}", hash);
 
             let hash = domain_registry.rent_price("aaaaaaaaa".to_string(), 10000000000000);
             println!("{}", hash.unwrap());
