@@ -6,8 +6,8 @@ mod domain_registry {
     extern crate alloc;
     
     use ink::{storage::Mapping};
-    use alloc::{string::{String}};
-    use sha3::{Digest};
+    use ink::prelude::{string::ToString, string::String};
+    use ink::env::hash::{Keccak256, HashOutput};
 
     /// The Domain registry result type.
     pub type Result<T> = core::result::Result<T, Error>;
@@ -52,7 +52,7 @@ mod domain_registry {
     pub struct DomainData {
         owner: AccountId,
         expiration_date: u64,
-        metadata: String,
+        metadata: ink::prelude::string::String,
     }
     
     #[derive(scale::Decode, scale::Encode)]
@@ -68,10 +68,10 @@ mod domain_registry {
     #[ink(storage)]
     pub struct DomainRegistry {
         domains: Mapping<String, DomainData>,
-        refunds: Mapping<String, RefundData>,
+        refunds: Mapping<[u8; 32], RefundData>,
         
-        requested_domain: Mapping<String, AccountId>,
-        reserve_time: Mapping<String, u64>,
+        requested_domain: Mapping<[u8; 32], AccountId>,
+        reserve_time: Mapping<[u8; 32], u64>,
 
         locked_balance: Mapping<AccountId, Balance>,
 
@@ -114,7 +114,7 @@ mod domain_registry {
          * @param salt random information
          */
         #[ink(message)]
-        pub fn generate_secret(&mut self, domain: String, salt: Hash) -> String {
+        pub fn generate_secret(&mut self, domain: String, salt: Hash) -> [u8; 32] {
             return self.generate_secret_internal(&domain, salt);
         }
 
@@ -133,15 +133,20 @@ mod domain_registry {
          * @param secret combination of domain and salt 
          */
         #[ink(message)]
-        pub fn request_domain(&mut self, secret: String) -> Result<()> {
-            let secret_slice: &str = &secret;
-            if self.requested_domain.get(secret_slice) != None {
+        pub fn request_domain(&mut self, secret: [u8; 32]) -> Result<()> {
+            // let secret_slice: &str = &secret;
+            if self.requested_domain.get(secret) != None {
                     return Err(Error::SecretAlreadyUsed);
             }
-            self.requested_domain.insert(secret_slice, &self.env().caller());
-            self.reserve_time.insert(secret_slice, &self.env().block_timestamp());
+            self.requested_domain.insert(secret, &self.env().caller());
+            self.reserve_time.insert(secret, &self.env().block_timestamp());
             
             Ok(())
+        }
+
+        #[ink(message)]
+        pub fn get(&self) -> u64 {
+            return 50;
         }
 
         /**
@@ -153,7 +158,7 @@ mod domain_registry {
          */
         #[ink(message, payable)]
         pub fn rent_domain(&mut self, domain: String, salt: Hash, duration: u64, metadata: String) -> Result<()> {
-            let secret: &str = &(self.generate_secret_internal(&domain, salt));
+            let secret: [u8; 32] = self.generate_secret_internal(&domain, salt);
             
             let requester: AccountId = self.requested_domain.get(secret).unwrap(); 
             if requester != self.env().caller() {
@@ -300,26 +305,30 @@ mod domain_registry {
         }
 
         // Internal functions
-        fn generate_key(&mut self, domain: &String) -> String {
+        fn generate_key(&mut self, domain: &String) -> [u8; 32] {
             return self.generate_hash(domain, Hash::default(), self.env().caller())
         }
 
-        fn generate_secret_internal(&mut self, domain: &String, salt: Hash) -> String {
+        fn generate_secret_internal(&mut self, domain: &String, salt: Hash) -> [u8; 32] {
             return self.generate_hash(domain, salt, self.zero_address())
         }
 
-        fn generate_hash(&mut self, domain: &String, salt: Hash, caller: AccountId) -> String {
-            let mut hasher = sha3::Keccak256::new();
-            hasher.update(domain);
+        fn generate_hash(&mut self, domain: &String, salt: Hash, caller: AccountId) -> [u8; 32] {
+            let mut hash;
 
             if salt != Hash::default() {
-                hasher.update(salt);
+                let encodable = (domain, salt);
+                hash =
+                    <ink::env::hash::Sha2x256 as ink::env::hash::HashOutput>::Type::default(); // 256-bit buffer
+                ink::env::hash_encoded::<ink::env::hash::Sha2x256, _>(&encodable, &mut hash);
             } else {
-                hasher.update(caller);
+                let encodable = (domain, caller);
+                hash =
+                    <ink::env::hash::Sha2x256 as ink::env::hash::HashOutput>::Type::default(); // 256-bit buffer
+                ink::env::hash_encoded::<ink::env::hash::Sha2x256, _>(&encodable, &mut hash);
             }
-            
-            let secret: String = format!("{:X}", hasher.finalize());
-            return secret;
+
+            return hash
         }
 
         pub fn rent_price_internal(&mut self, domain: &String, duration: u64) -> Result<u128> {
@@ -367,10 +376,11 @@ mod domain_registry {
             let mut domain_registry = DomainRegistry::new();
 
             let salt = Hash::from([0x1; 32]);
-            let hash = domain_registry.generate_secret("MyDomain".to_string(), salt);
-            println!("{}", hash);
+            println!("{:?}", salt);
+            let secret = domain_registry.generate_secret("MyDomain".to_string(), salt);
+            println!("{:?}", secret);
 
-            domain_registry.request_domain(hash);
+            domain_registry.request_domain(secret);
             domain_registry.rent_domain("MyDomain".to_string(), salt, 10000000, "myData".to_string());
 
             let domain_data = domain_registry.get_domain_data("MyDomain".to_string());
@@ -379,7 +389,7 @@ mod domain_registry {
             let hash = domain_registry.rent_price("aaaaaaaaa".to_string(), 10000000000000);
             println!("{}", hash.unwrap());
 
-            let hash = domain_registry.request_domain("aaaaaaa".to_string());
+            let hash = domain_registry.request_domain(secret);
             println!("{:?}", hash);
 
             assert_eq!(domain_registry.domain_length(&"casa".to_string()), 4);
