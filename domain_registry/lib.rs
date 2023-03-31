@@ -148,7 +148,7 @@ mod domain_registry {
         pub fn get(&self) -> u64 {
             return 50;
         }
-
+        
         /**
          * @dev Confirm a domain reserve, transaction must be send with enough ether to pay for the duration of the rent
          * @param domain desired domain
