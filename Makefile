@@ -8,6 +8,6 @@ deploy-testnet: build
 
 execute-test:
 	cp domain_registry/target/ink/metadata.json test/contract-files/
-	cd test && node index.js
+	cd test && yarn run test
 
 deploy-and-test: deploy-testnet execute-test

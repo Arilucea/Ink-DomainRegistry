@@ -124,8 +124,8 @@ mod domain_registry {
          * @param duration how long is the domain rent (in seconds)
          */
         #[ink(message)]
-        pub fn rent_price(&mut self, domain: String, duration: u64) -> Result<u128> {
-            return self.rent_price_internal(&domain, duration);
+        pub fn rent_price(&mut self, domain: String, duration: u64) -> u128 {
+            return self.rent_price_internal(&domain, duration).unwrap_or_default();
         }
 
         /**
@@ -142,11 +142,6 @@ mod domain_registry {
             self.reserve_time.insert(secret, &self.env().block_timestamp());
             
             Ok(())
-        }
-
-        #[ink(message)]
-        pub fn get(&self) -> u64 {
-            return 50;
         }
         
         /**
@@ -387,7 +382,7 @@ mod domain_registry {
             println!("{:?}", domain_data);
 
             let hash = domain_registry.rent_price("aaaaaaaaa".to_string(), 10000000000000);
-            println!("{}", hash.unwrap());
+            println!("{}", hash);
 
             let hash = domain_registry.request_domain(secret);
             println!("{:?}", hash);
