@@ -107,6 +107,14 @@ mod domain_registry {
         pub fn update_min_lock_time(&mut self, locking_time: u64) {
             self.min_lock_time = locking_time;
         }
+
+        /**
+         * @dev Returns the minimum duration of a domain registration
+         */
+        #[ink(message)]
+        pub fn get_min_lock_time(&mut self) -> u64 {
+            return self.min_lock_time;
+        }
         
         /**
          * @dev Create a combination with the domain and other information
@@ -159,10 +167,10 @@ mod domain_registry {
             if requester != self.env().caller() {
                 return Err(Error::NotTheOriginalRequester);
             }
-            let reserve_time: u64 = self.reserve_time.get(secret).unwrap(); 
-            if reserve_time < self.env().block_timestamp() {
-                return Err(Error::RentCannotBeDoneInSameBlock);
-            } 
+            // let reserve_time: u64 = self.reserve_time.get(secret).unwrap(); 
+            // if reserve_time < self.env().block_timestamp() {
+            //     return Err(Error::RentCannotBeDoneInSameBlock);
+            // } 
 
             let domain_cost: u128 = self.rent_price_internal(&domain, duration).unwrap();
             if self.env().transferred_value() < domain_cost {
