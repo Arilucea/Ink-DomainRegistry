@@ -6,8 +6,7 @@ mod domain_registry {
     extern crate alloc;
     
     use ink::{storage::Mapping};
-    use ink::prelude::{string::ToString, string::String};
-    use ink::env::hash::{Keccak256, HashOutput};
+    use ink::prelude::{string::String};
 
     /// The Domain registry result type.
     pub type Result<T> = core::result::Result<T, Error>;
@@ -42,6 +41,7 @@ mod domain_registry {
         DomainExpired,
         NotDomainOwner,
         DomainNotExpired,
+        NotContractOwner,
     }
 
 
@@ -92,7 +92,7 @@ mod domain_registry {
                 reserve_time: Mapping::default(),
                 locked_balance: Mapping::default(),
         
-                default_fee_by_letter: 500000000,
+                default_fee_by_letter: 500,
                 min_lock_time: 30 * 24 * 60 * 60,
                 locked: bool::default(),
                 
@@ -104,8 +104,21 @@ mod domain_registry {
          * @dev Change the minimum duration of a domain registration
          */
         #[ink(message)]
-        pub fn update_min_lock_time(&mut self, locking_time: u64) {
+        pub fn update_min_lock_time(&mut self, locking_time: u64) -> Result<()> {
+            if self.env().caller() != self.owner {
+                return Err(Error::NotContractOwner);
+            } 
             self.min_lock_time = locking_time;
+            
+            Ok(())
+        }
+
+        /**
+         * @dev Returns the minimum duration of a domain registration
+         */
+        #[ink(message)]
+        pub fn get_min_lock_time(&mut self) -> u64 {
+            return self.min_lock_time;
         }
         
         /**
@@ -124,8 +137,8 @@ mod domain_registry {
          * @param duration how long is the domain rent (in seconds)
          */
         #[ink(message)]
-        pub fn rent_price(&mut self, domain: String, duration: u64) -> Result<u128> {
-            return self.rent_price_internal(&domain, duration);
+        pub fn rent_price(&mut self, domain: String, duration: u64) -> u128 {
+            return self.rent_price_internal(&domain, duration).unwrap_or_default();
         }
 
         /**
@@ -143,12 +156,7 @@ mod domain_registry {
             
             Ok(())
         }
-
-        #[ink(message)]
-        pub fn get(&self) -> u64 {
-            return 50;
-        }
-
+        
         /**
          * @dev Confirm a domain reserve, transaction must be send with enough ether to pay for the duration of the rent
          * @param domain desired domain
@@ -165,7 +173,7 @@ mod domain_registry {
                 return Err(Error::NotTheOriginalRequester);
             }
             let reserve_time: u64 = self.reserve_time.get(secret).unwrap(); 
-            if reserve_time < self.env().block_timestamp() {
+            if reserve_time >= self.env().block_timestamp() {
                 return Err(Error::RentCannotBeDoneInSameBlock);
             } 
 
@@ -267,7 +275,7 @@ mod domain_registry {
         pub fn refund_domain(&mut self, domain: String) -> Result<()> {
             let refund_key = self.generate_key(&domain);
             let refund_data: RefundData = self.refunds.get(refund_key).unwrap();
-            if refund_data.expiration_date <= self.env().block_timestamp() {
+            if refund_data.expiration_date >= self.env().block_timestamp() {
                 return Err(Error::DomainNotExpired);
             }
 
@@ -331,7 +339,7 @@ mod domain_registry {
             return hash
         }
 
-        pub fn rent_price_internal(&mut self, domain: &String, duration: u64) -> Result<u128> {
+        fn rent_price_internal(&mut self, domain: &String, duration: u64) -> Result<u128> {
             let domain_length = self.domain_length(&domain);
             if domain_length == 0 {
                 return Err(Error::DomainLengthIsZero)
@@ -340,7 +348,7 @@ mod domain_registry {
                 return Err(Error::DurationIsNotEnough)
             }
             let duration: u128 = duration.into();
-            return Ok(domain_length * duration);
+            return Ok(self.default_fee_by_letter * domain_length * duration);
         }
 
 
@@ -353,47 +361,4 @@ mod domain_registry {
         }
     }
 
-    /// Unit tests in Rust are normally defined within such a `#[cfg(test)]`
-    /// module and test functions are marked with a `#[test]` attribute.
-    /// The below code is technically just normal Rust code.
-    #[cfg(test)]
-    mod tests {
-        /// Imports all the definitions from the outer scope so we can use them here.
-        use super::*;
-
-        fn default_accounts(
-        ) -> ink::env::test::DefaultAccounts<ink::env::DefaultEnvironment> {
-            ink::env::test::default_accounts::<Environment>()
-        }
-
-        fn set_next_caller(caller: AccountId) {
-            ink::env::test::set_caller::<Environment>(caller);
-        }
-
-        /// We test if the default constructor does its job.
-        #[ink::test]
-        fn deploy_works() {
-            let mut domain_registry = DomainRegistry::new();
-
-            let salt = Hash::from([0x1; 32]);
-            println!("{:?}", salt);
-            let secret = domain_registry.generate_secret("MyDomain".to_string(), salt);
-            println!("{:?}", secret);
-
-            domain_registry.request_domain(secret);
-            domain_registry.rent_domain("MyDomain".to_string(), salt, 10000000, "myData".to_string());
-
-            let domain_data = domain_registry.get_domain_data("MyDomain".to_string());
-            println!("{:?}", domain_data);
-
-            let hash = domain_registry.rent_price("aaaaaaaaa".to_string(), 10000000000000);
-            println!("{}", hash.unwrap());
-
-            let hash = domain_registry.request_domain(secret);
-            println!("{:?}", hash);
-
-            assert_eq!(domain_registry.domain_length(&"casa".to_string()), 4);
-        }
-
-    }
 }

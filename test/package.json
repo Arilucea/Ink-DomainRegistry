@@ -1,0 +1,17 @@
+{
+  "name": "domain_registry_test",
+  "version": "1.0.0",
+  "main": "index.js",
+  "author": "Arilucea",
+  "license": "MIT",
+  "dependencies": {
+    "@polkadot/api": "^10.2.1",
+    "@polkadot/api-contract": "^10.2.1"
+  },
+  "devDependencies": {
+    "mocha": "^10.2.0"
+  },
+  "scripts": {
+    "test": "mocha --timeout 30000"
+  }
+}
