@@ -9,5 +9,3 @@ deploy-testnet: build
 execute-test:
 	cp domain_registry/target/ink/metadata.json test/contract-files/
 	cd test && yarn run test
-
-deploy-and-test: deploy-testnet execute-test
