@@ -312,6 +312,14 @@ mod domain_registry {
             }
         }
 
+        /**
+         * Contract account id function needed by the test
+         */
+        #[ink(message)]
+        pub fn get_id(&self) -> AccountId {
+            self.env().account_id()
+        }
+
         // Internal functions
         fn generate_key(&mut self, domain: &String) -> [u8; 32] {
             return self.generate_hash(domain, Hash::default(), self.env().caller())
@@ -361,4 +369,140 @@ mod domain_registry {
         }
     }
 
+    /// Unit tests
+    #[cfg(test)]
+    mod domain_registry_tests {
+        use super::*;
+
+        fn default_accounts(
+        ) -> ink::env::test::DefaultAccounts<ink::env::DefaultEnvironment> {
+            ink::env::test::default_accounts::<Environment>()
+        }
+
+        fn rent_domain_env(contract: AccountId, price: u128) {
+            let new_block_timestamp: u64 = 1000;
+            ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(new_block_timestamp);
+            ink_env::test::set_callee::<ink_env::DefaultEnvironment>(contract);
+            ink_env::test::set_caller::<ink_env::DefaultEnvironment>(default_accounts().alice);
+            ink::env::test::set_value_transferred::<ink_env::DefaultEnvironment>(price);
+        }
+
+        #[ink::test]
+        fn update_min_lock_time_works() {
+            // given
+            let mut domain_registry = DomainRegistry::new();
+            let new_lock_time = 60 * 24 * 60 * 60; // 60 days
+
+            // when
+            domain_registry.update_min_lock_time(new_lock_time).unwrap();
+
+            // then
+            assert_eq!(domain_registry.get_min_lock_time(), new_lock_time);
+        }
+
+        #[ink::test]
+        fn generate_secret_works() {
+            // given
+            let mut domain_registry = DomainRegistry::new();
+            let domain = "mydomain".to_string();
+            let salt = Hash::from([1u8; 32]);
+
+            // when
+            let secret = domain_registry.generate_secret(domain.clone(), salt);
+
+            // then
+            let encodable = (domain, salt);
+            let mut hash =
+                <ink::env::hash::Sha2x256 as ink::env::hash::HashOutput>::Type::default(); // 256-bit buffer
+            ink::env::hash_encoded::<ink::env::hash::Sha2x256, _>(&encodable, &mut hash);
+            assert_eq!(secret, hash.as_slice());
+        }
+
+        #[ink::test]
+        fn rent_price_works() {
+            // given
+            let mut domain_registry = DomainRegistry::new();
+            let domain = "mydomain".to_string();
+            let duration = 30 * 24 * 60 * 60; // 30 days
+
+            // when
+            let price = domain_registry.rent_price(domain.clone(), duration);
+
+            // then
+            assert_eq!(price, domain_registry.default_fee_by_letter * domain.len() as u128 * duration as u128);
+        }
+
+        #[ink::test]
+        fn request_domain_works() {
+            // given
+            let caller = default_accounts();
+            let mut domain_registry = DomainRegistry::new();
+            let domain = "mydomain".to_string();
+            let salt = Hash::from([1u8; 32]);
+            let secret = domain_registry.generate_secret(domain.clone(), salt);
+
+            // when
+            domain_registry.request_domain(secret).unwrap();
+
+            // then
+            assert_eq!(domain_registry.requested_domain.get(secret), Some(caller.alice));
+        }
+        
+        #[ink::test]
+        fn test_rent_domain() {
+            // Initialize a contract instance
+            let mut domain_registry = DomainRegistry::new();
+
+            let owner = default_accounts().alice;
+            let domain = "example.com".to_string();
+            let duration = 60 * 60 * 24 * 31; // 1 year in seconds
+            let secret = domain_registry.generate_secret(domain.clone(), Hash::default());
+            let price = domain_registry.rent_price(domain.clone(), duration);
+            
+            domain_registry.request_domain(secret).unwrap();
+            rent_domain_env(domain_registry.get_id(), price);
+
+            // Call the rent_domain function
+            let result = domain_registry.rent_domain(domain.clone(), Hash::default(), duration, "meta_data".to_string());
+
+            // Check that the result is Ok
+            assert_eq!(result, Ok(()));
+
+            // Check that the domain data was stored correctly
+            let domain_data = domain_registry.domains.get(&domain).unwrap();
+            assert_eq!(&domain_data.owner, &owner);
+            assert_eq!(&domain_data.expiration_date, &(duration+1000));
+        }
+
+        #[ink::test]
+        fn test_renew_domain() {
+            // Initialize a contract instance
+            let mut domain_registry = DomainRegistry::new();
+
+            let owner = default_accounts().alice;
+            let domain = "example.com".to_string();
+            let duration = 60 * 60 * 24 * 31; // 1 year in seconds
+            let secret = domain_registry.generate_secret(domain.clone(), Hash::default());
+            let price = domain_registry.rent_price(domain.clone(), duration);
+            
+            // Rent the domain
+            domain_registry.request_domain(secret).unwrap();
+            rent_domain_env(domain_registry.get_id(), price);
+            let _result = domain_registry.rent_domain(domain.clone(), Hash::default(), duration, "meta_data".to_string());
+                  
+            // Renew the domain
+            ink_env::test::set_callee::<ink_env::DefaultEnvironment>(domain_registry.get_id());
+            ink_env::test::set_caller::<ink_env::DefaultEnvironment>(default_accounts().alice);
+            ink::env::test::set_value_transferred::<ink_env::DefaultEnvironment>(price*2);
+
+            let new_expiration_date = 60 * 60 * 24 * 62;
+            domain_registry.renew_domain(domain.clone(), new_expiration_date).unwrap();
+
+            // Check that the domain was updated
+            let updated_domain_data = domain_registry.domains.get(&domain).unwrap();
+            assert_eq!(updated_domain_data.owner, owner);
+            assert_eq!(updated_domain_data.expiration_date, new_expiration_date+1000);
+            assert_eq!(updated_domain_data.metadata, "meta_data");
+        }
+    }
 }
